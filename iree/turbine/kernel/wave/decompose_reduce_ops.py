@@ -100,7 +100,7 @@ def decompose_reduce_ops(
                 )
 
             # Local Reduce
-            if reduction_dim is not custom.type.symbolic_shape[-1]:
+            if reduction_dim is not get_custom(custom.arg).type.symbolic_shape[-1]:
                 raise NotImplementedError(
                     "Only implemented reduction on fastest dimension."
                 )

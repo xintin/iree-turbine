@@ -1040,7 +1040,14 @@ class ExtractSlice(CustomOp):
 
     @property
     def type(self) -> "Register":
-        return get_custom(self.register_).type
+        # Intuition here is we are trying to extract an element
+        # from fastest dim => we reduce the fastest dim.
+        src_type = get_custom(self.register_).type
+        if len(src_type.symbolic_shape) <= 1:
+            return src_type
+        dst_shape = src_type.symbolic_shape[:-1]
+        dst_type = Register[*dst_shape, src_type.dtype]
+        return dst_type
 
 
 @define_op("broadcast")
@@ -1094,7 +1101,9 @@ class ReduceOp(CustomOp, ABC):
     @property
     def type(self) -> Memory:
         src_type = get_custom(self.arg).type
-        return src_type
+        reduced_dims = [dims for dims in src_type.symbolic_shape if dims != self.dim]
+        dst_type = Register[*reduced_dims, src_type.dtype]
+        return dst_type
 
     @property
     def num_reduction_dims(self) -> int:
