@@ -1345,6 +1345,68 @@ def test_broadcast_add():
         # CHECK: %[[BCAST_RHS_1:.+]] = vector.splat %[[EXTRACT_1]] : vector<2xf16>
         # CHECK: arith.addf %[[LHS_1]], %[[BCAST_RHS_1]] : vector<2xf16>
 
+@run_test
+def test_reduce_non_iv_acc():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={M: 1, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, N, 0)]
+    constraints += [tkw.TilingConstraint(N, BLOCK_N)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
+        c: tkl.Memory[M, ADDRESS_SPACE, tkl.f32],
+    ):
+        init_sum = tkl.Register[M, tkl.f32](0)
+
+        @tkw.reduction(N, init_args=[init_sum])
+        def repeat(
+            partial_d: tkl.Register[M, tkl.f32],
+        ) -> tkl.Register[M, tkl.f32]:
+            src = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+            e_pd = partial_d + partial_d
+            d_j = tkw.sum(src, e_pd, dim=N)
+            return d_j
+
+        tkw.write(repeat, c, elements_per_thread=1)
+
+    config = {"backend": "rocm", "device": "hip", "target": "gfx942"}
+
+    shape = (256, 1024)
+    a = torch.randn(shape, dtype=torch.float32)
+    c = torch.zeros((shape[0],), dtype=torch.float32)
+    with tk.gen.TestLaunchContext(
+        {
+            M: shape[0],
+            N: shape[1],
+            BLOCK_M: 1,
+            BLOCK_N: 128,
+            LOAD_ELEMS_PER_THREAD: 2,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run=False,
+        run_config=config,
+    ):
+        print(test(a, c).module_op)
+        # CHECK-DAG: %[[C1:.+]] = arith.constant 1 : index
+        # CHECK-DAG: %[[C8:.+]] = arith.constant 8 : index
+        # CHECK-DAG: %[[C0:.+]] = arith.constant 0 : index
+        # CHECK: %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+        # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C8]] step %[[C1]] iter_args(%[[IV:.+]] = %[[CST]]) -> (vector<1xf32>) {
+        # CHECK: %[[ACC:.+]] = arith.addf %[[IV]], %[[IV]] : vector<1xf32>
+        # CHECK-COUNT-6: gpu.shuffle  xor
+        # CHECK: %[[LAST_REDUC:.+]] = arith.addf %{{.*}}, %{{.*}} : vector<1xf32>
+        # CHECK: %[[ACC_REDUC:.+]] = arith.addf %[[ACC]], %[[LAST_REDUC]] : vector<1xf32>
+        # CHECK: scf.yield %[[ACC_REDUC]] : vector<1xf32>
 
 @run_test
 def test_binary_lowerings():
