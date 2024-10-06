@@ -1345,6 +1345,7 @@ def test_broadcast_add():
         # CHECK: %[[BCAST_RHS_1:.+]] = vector.splat %[[EXTRACT_1]] : vector<2xf16>
         # CHECK: arith.addf %[[LHS_1]], %[[BCAST_RHS_1]] : vector<2xf16>
 
+
 @run_test
 def test_reduce_non_iv_acc():
     constraints: list[tkw.Constraint] = [
@@ -1407,6 +1408,7 @@ def test_reduce_non_iv_acc():
         # CHECK: %[[LAST_REDUC:.+]] = arith.addf %{{.*}}, %{{.*}} : vector<1xf32>
         # CHECK: %[[ACC_REDUC:.+]] = arith.addf %[[ACC]], %[[LAST_REDUC]] : vector<1xf32>
         # CHECK: scf.yield %[[ACC_REDUC]] : vector<1xf32>
+
 
 @run_test
 def test_binary_lowerings():
