@@ -415,6 +415,17 @@ def _expand_reduction(
 
     # Get the output node of the reduction
     reduction_subgraph = trace.get_subgraph(reduction.subgraph_name)
+    constraints = node_index_setter.args[0]
+    local_mma_index, local_mma_slices = get_mma_dimensional_mapping(
+        reduction_subgraph, get_hardware_constraint(constraints)
+    )
+    local_index_setter = partial(
+        node_index_setter.func,
+        node_index_setter.args[0],
+        local_mma_index,
+        local_mma_slices,
+        node_index_setter.args[3],
+    )
     output = get_custom(get_last(reduction_subgraph.nodes))
     if not isinstance(output, Output):
         raise ValueError(
@@ -440,25 +451,27 @@ def _expand_reduction(
             ] = new_node
 
             # Proceed with expansion inside the reduction
-            new_output_args.append(
-                _expand_node(
-                    arg, trace, dims, dim_scaling, node_index_setter, context, res_idx
-                )
+            expanded_output = _expand_node(
+                arg, trace, dims, dim_scaling, local_index_setter, context, 0
             )
+            if expanded_output in new_output_args:
+                continue
+            new_output_args.append(expanded_output)
 
         # Proceed with expansion outside the reduction
         for init_arg in reduction.init_args:
-            new_init_args.append(
-                _expand_node(
-                    get_custom(init_arg),
-                    trace,
-                    dims,
-                    dim_scaling,
-                    node_index_setter,
-                    context,
-                    res_idx,
-                )
+            expanded_init_arg = _expand_node(
+                get_custom(init_arg),
+                trace,
+                dims,
+                dim_scaling,
+                local_index_setter,
+                context,
+                0,
             )
+            if expanded_init_arg in new_init_args:
+                continue
+            new_init_args.append(expanded_init_arg)
 
     # Update init_args and return values
     reduction.update_arg(
@@ -470,9 +483,9 @@ def _expand_reduction(
         output,
         trace,
         dim_scaling,
-        node_index_setter,
+        local_index_setter,
         context,
-        res_idx,
+        0,
     )
     # Even though we expanded the reduction in multiple dimensions, we only return
     # the node corresponding to the original query
@@ -617,7 +630,6 @@ def _handle_reduction_dim(
                 )
 
                 # This expansion always happens, user should never be reused
-                assert new_node != user
                 user.update_arg(index, saved_arg)
                 new_node.update_arg(index, user)
                 user.graph.erase_node(dummy)

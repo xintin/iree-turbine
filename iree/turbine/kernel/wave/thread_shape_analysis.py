@@ -52,7 +52,7 @@ def set_index_size(custom: CustomOp, target_dim_sizes: list[DimSize]):
 #################################################################
 
 anchorOpTypes = (Read, Write, MMA, ReduceOp)
-noHandleTypes = (Placeholder, Output, ExtractSlice, Allocate)
+noHandleTypes = (Placeholder, Output, ExtractSlice, Allocate, GetResult)
 nonPropagatableTypes = anchorOpTypes + noHandleTypes
 
 
@@ -169,9 +169,10 @@ def determine_thread_shapes(trace: CapturedTrace):
             lhs_bwd_slice = capture_backward_slice(custom.lhs, propagatable_op)
             rhs_bwd_slice = capture_backward_slice(custom.rhs, propagatable_op)
             acc_slice = capture_forward_slice(custom.acc, propagatable_op)
-            acc_slice = acc_slice.union(
-                capture_backward_slice(custom.acc, propagatable_op)
-            )
+            if not isinstance(get_custom(custom.acc), MMA):
+                acc_slice = acc_slice.union(
+                    capture_backward_slice(custom.acc, propagatable_op)
+                )
             acc_index = get_dim_sizes(custom.acc_index)
             lhs_index = get_dim_sizes(custom.lhs_index)
             rhs_index = get_dim_sizes(custom.rhs_index)

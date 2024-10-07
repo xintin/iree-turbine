@@ -210,7 +210,12 @@ def get_mma_dimensional_mapping(
         return isinstance(get_custom(node), MMA)
 
     mapping: dict[IndexSymbol, int] = {}
-    mma_nodes = trace.walk(is_mma)
+    if isinstance(trace, CapturedTrace):
+        mma_nodes = trace.walk(is_mma)
+    elif isinstance(trace, fx.Graph):
+        mma_nodes = [node for node in trace.nodes if is_mma(node)]
+    else:
+        raise ValueError("Not correct graph type to get mma dimensional.")
     for node in mma_nodes:
         custom: MMA = get_custom(node)
         m, n = custom.acc_type.symbolic_shape[-2:]
@@ -513,16 +518,17 @@ def get_inputs(
     custom = get_custom(node)
     if isinstance(custom, IterArg):
         # Map iter args to init args
-        local_reduction = reduction
-        if reduction is None:
-            local_reduction = custom.parent_op()
+        local_reduction = custom.parent_op()
         iter_arg_idx = custom.get_iter_idx()
         inputs.append(local_reduction.init_args[iter_arg_idx])
+
     elif isinstance(custom, GetResult):
         reduction = get_custom(custom.value)
         assert isinstance(reduction, Reduction), "GetResult must be used by a Reduction"
         # Map get result to output
-        reduction_subgraph = reduction.graph.subgraphs[reduction.subgraph_name]
+        reduction_subgraph = reduction.get_root_graph().subgraphs[
+            reduction.subgraph_name
+        ]
         inputs.append(reduction.outputs(reduction_subgraph)[custom.res_idx])
     else:
         # Default handling for other ops.
