@@ -99,6 +99,14 @@ def exp2(src: "Register") -> "Register":
     ...
 
 
+def transpose(src: "Register") -> "Register":
+    ...
+
+
+def trunc(src: "Register", dtype: DataType) -> "Register":
+    ...
+
+
 def maximum(lhs: "Register", rhs: "Register") -> "Register":
     ...
 
@@ -553,6 +561,7 @@ class BinaryPyOp(CustomOp, ABC):
 
 
 @define_interface_op("exp2")
+@define_interface_op("transpose")
 @define_py_op(operator.neg)
 @dataclass
 class UnaryPyOp(CustomOp, ABC):
@@ -1187,3 +1196,23 @@ class ShuffleOp(CustomOp):
     def type(self) -> Memory:
         src_type = get_custom(self.arg).type
         return src_type
+
+
+@define_interface_op("trunc")
+@dataclass
+class CastOp(CustomOp, ABC):
+    """
+    Represents a unary python operator.
+    """
+
+    arg: fx.Node
+    dtype: DataType
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        return get_custom(self.arg).indexing_dims
+
+    @property
+    def type(self) -> Memory:
+        src_shape = get_custom(self.arg).type.symbolic_shape
+        return Register[*src_shape, self.dtype]

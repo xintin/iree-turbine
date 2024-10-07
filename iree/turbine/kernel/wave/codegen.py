@@ -60,6 +60,8 @@ from ..ops.wave_ops import (
     shared_memory_barrier,
     extract,
     extract_slice,
+    transpose,
+    trunc,
     CustomOp,
 )
 from ..lang.wave_types import IndexMapping, IndexSymbol
@@ -1151,6 +1153,60 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
     element = vector_d.extract(vector_src, static_position=[0], dynamic_position=[])
     splat = vector_d.splat(result_type, element)
     emitter.bind_node_proxy(node, IRProxyValue(splat))
+
+
+@handle_op(transpose)
+def handle_transpose(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (register,) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    # Check MLIR shape
+    vector_src = cast_py_value(emitter, register)
+    emitter.bind_node_proxy(node, vector_src)
+
+
+@handle_op(trunc)
+def handle_trunc(emitter: WaveEmitter, node: fx.Node):
+    try:
+        register, dtype = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    # Check MLIR shape
+    vector_src = cast_vector(emitter, register)
+    src_vector_type = vector_src.type
+    src_elem_type = src_vector_type.element_type
+    dst_elem_type = IrType.parse(dtype.ir_type_asm())
+    dst_vector_type = VectorType.get(src_vector_type.shape, dst_elem_type)
+
+    # Early exit if src_type is already same as dst_type.
+    if src_vector_type == dst_vector_type:
+        emitter.bind_node_proxy(node, vector_src)
+        return
+
+    # Currently only support case where both lhs/rhs are floats or ints.
+    types_are_float = _is_float_type(src_elem_type) and _is_float_type(dst_elem_type)
+    types_are_integer = _is_integer_like_type(src_elem_type) and _is_integer_like_type(
+        dst_elem_type
+    )
+    if not (types_are_float or types_are_integer):
+        raise NotImplementedError(
+            "NYI: Only support when src and dst types are both ints or both floats."
+        )
+
+    # Key: (src.width < dst.width, is_float)
+    cast_ops = {
+        (True, True): arith_d.extf,
+        (True, False): arith_d.extsi,
+        (False, True): arith_d.truncf,
+        (False, False): arith_d.trunci,
+    }
+    casted_vector = cast_ops[
+        src_elem_type.width < dst_elem_type.width, types_are_float
+    ](dst_vector_type, vector_src)
+    emitter.bind_node_proxy(node, IRProxyValue(casted_vector))
 
 
 ###############################################################################
