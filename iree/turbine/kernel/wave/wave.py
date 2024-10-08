@@ -237,6 +237,7 @@ class LaunchableWave(Launchable):
         partition_strided_operators(graph, self.constraints)
 
         # Analyze Thread Shapes per Op.
+        # import pdb; pdb.set_trace()
         determine_thread_shapes(graph)
 
         # Decompose reduce Ops.

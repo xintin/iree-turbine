@@ -101,6 +101,9 @@ def decompose_reduce_ops(
 
             # Local Reduce
             if reduction_dim is not get_custom(custom.arg).type.symbolic_shape[-1]:
+                import pdb
+
+                pdb.set_trace()
                 raise NotImplementedError(
                     "Only implemented reduction on fastest dimension."
                 )

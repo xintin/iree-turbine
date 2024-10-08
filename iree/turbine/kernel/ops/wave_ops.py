@@ -99,7 +99,7 @@ def exp2(src: "Register") -> "Register":
     ...
 
 
-def transpose(src: "Register") -> "Register":
+def transpose(src: "Register", dims: list[Any]) -> "Register":
     ...
 
 
@@ -893,12 +893,26 @@ class Reduction(CustomOp):
 
         return wrapper
 
+    def get_root_graph(self):
+        """
+        Get root graph from some child graph inside a nested graph.
+        Using the assumption that any child/nested graph should have a parent_op,
+        who we can query for it's owner graph from to go up one level.
+        """
+        cur_graph = self.graph
+        while not hasattr(cur_graph, "subgraphs"):
+            if not hasattr(cur_graph, "parent_op"):
+                raise ValueError("All subgraphs should have parent_op")
+            cur_graph = cur_graph.parent_op.graph
+        return cur_graph
+
     @property
     def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:
         expand_dims: list[IndexSymbol] = []
+        root_graph = self.get_root_graph()
         return_node = [
             nested_node
-            for nested_node in self.graph.subgraphs[self.subgraph_name].nodes
+            for nested_node in root_graph.subgraphs[self.subgraph_name].nodes
             if isinstance(get_custom(nested_node), Output)
         ]
         assert len(return_node) == 1
@@ -1216,3 +1230,27 @@ class CastOp(CustomOp, ABC):
     def type(self) -> Memory:
         src_shape = get_custom(self.arg).type.symbolic_shape
         return Register[*src_shape, self.dtype]
+
+
+@define_op("transpose")
+@dataclass
+class Transpose(CustomOp, ABC):
+    """
+    Represents a unary python operator.
+    """
+
+    arg: fx.Node
+    dims: list[Any]
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        return get_custom(self.arg).indexing_dims
+
+    @property
+    def type(self) -> Memory:
+        src_type = get_custom(self.arg).type
+        src_shape = src_type.symbolic_shape
+        for dim in self.dims:
+            if not dim in src_shape:
+                raise ValueError("Cannot find permuted/dst dim in src shape.")
+        return Register[*self.dims, src_type.dtype]

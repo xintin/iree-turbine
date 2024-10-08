@@ -25,6 +25,10 @@ def add_shared_memory_barriers(
     graph = trace
     if isinstance(trace, CapturedTrace):
         graph = trace.get_root_graph()
+        trace = trace.get_root_graph()
+
+    if hasattr(graph, "parent_op"):
+        trace = get_custom(graph.parent_op).get_root_graph()
 
     for node in graph.nodes:
         custom = get_custom(node)
@@ -41,7 +45,7 @@ def add_shared_memory_barriers(
             last_node = custom
         if isinstance(custom, Reduction):
             last_node = add_shared_memory_barriers(
-                trace.get_subgraph(custom.subgraph_name), last_node
+                trace.subgraphs[custom.subgraph_name], last_node
             )
 
     return last_node

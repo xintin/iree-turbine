@@ -411,6 +411,14 @@ def _expand_reduction(
 
     # Get the output node of the reduction
     reduction_subgraph = trace.get_subgraph(reduction.subgraph_name)
+    local_mma_index, local_mma_slices = get_mma_dimensional_mapping(reduction_subgraph)
+    local_index_setter = partial(
+        node_index_setter.func,
+        node_index_setter.args[0],
+        local_mma_index,
+        local_mma_slices,
+        node_index_setter.args[3],
+    )
     output = get_custom(get_last(reduction_subgraph.nodes))
     if not isinstance(output, Output):
         raise ValueError(
@@ -438,7 +446,7 @@ def _expand_reduction(
             # Proceed with expansion inside the reduction
             new_output_args.append(
                 _expand_node(
-                    arg, trace, dims, dim_scaling, node_index_setter, context, res_idx
+                    arg, trace, dims, dim_scaling, local_index_setter, context, res_idx
                 )
             )
 
@@ -450,7 +458,7 @@ def _expand_reduction(
                     trace,
                     dims,
                     dim_scaling,
-                    node_index_setter,
+                    local_index_setter,
                     context,
                     res_idx,
                 )
@@ -466,7 +474,7 @@ def _expand_reduction(
         output,
         trace,
         dim_scaling,
-        node_index_setter,
+        local_index_setter,
         context,
         res_idx,
     )

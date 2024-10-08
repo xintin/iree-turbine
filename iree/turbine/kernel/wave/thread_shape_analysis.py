@@ -41,9 +41,6 @@ def get_custom_dim_sizes(custom: CustomOp):
 def set_index_size(custom: CustomOp, target_dim_sizes: list[DimSize]):
     for target in target_dim_sizes:
         if target.dim not in custom.index:
-            import pdb
-
-            pdb.set_trace()
             raise NotImplementedError(
                 "NYI: Handle when source target index size is not found in target/user index."
             )
@@ -55,7 +52,7 @@ def set_index_size(custom: CustomOp, target_dim_sizes: list[DimSize]):
 #################################################################
 
 anchorOpTypes = (Read, Write, MMA, ReduceOp)
-noHandleTypes = (Placeholder, Output, ExtractSlice, Allocate)
+noHandleTypes = (Placeholder, Output, ExtractSlice, Allocate, GetResult)
 nonPropagatableTypes = anchorOpTypes + noHandleTypes
 
 
@@ -158,10 +155,16 @@ def determine_thread_shapes(trace: CapturedTrace):
     for anchor_op in anchor_ops:
         custom = get_custom(anchor_op)
         index_sizes = get_custom_dim_sizes(custom)
-        if isinstance(custom, (Read, ReduceOp)):
+        if isinstance(custom, Read):
             fwd_slice = capture_forward_slice(custom.fx_node, propagatable_op)
             thread_size_to_ops[index_sizes] = thread_size_to_ops.get(
                 index_sizes, set([])
+            ).union(fwd_slice)
+        elif isinstance(custom, ReduceOp):
+            fwd_slice = capture_forward_slice(custom.fx_node, propagatable_op)
+            reduce_dims = frozenset([DimSize(dim, 1) for dim in custom.index.keys()])
+            thread_size_to_ops[reduce_dims] = thread_size_to_ops.get(
+                reduce_dims, set([])
             ).union(fwd_slice)
         elif isinstance(custom, Write):
             bwd_slice = capture_backward_slice(custom.fx_node, propagatable_op)
@@ -196,6 +199,9 @@ def determine_thread_shapes(trace: CapturedTrace):
         if not cummulative_set.isdisjoint(target_ops):
             conflicted_ops = cummulative_set.intersection(target_ops)
             if handle_conflicts(conflicted_ops) == False:
+                import pdb
+
+                pdb.set_trace()
                 raise NotImplementedError("Failed to handle conflicting thread shape.")
             target_ops = target_ops.difference(conflicted_ops)
         cummulative_set = cummulative_set.union(target_ops)

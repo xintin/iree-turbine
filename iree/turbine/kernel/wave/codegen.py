@@ -1158,7 +1158,7 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
 @handle_op(transpose)
 def handle_transpose(emitter: WaveEmitter, node: fx.Node):
     try:
-        (register,) = node.args
+        register, _ = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
