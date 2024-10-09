@@ -31,14 +31,10 @@ ExpandedNodeMap: TypeAlias = dict[
 ]
 
 
-def already_expanded_iter_arg(node: CustomOp, dims: dict[IndexSymbol, int]) -> bool:
-    return (
-        hasattr(node.fx_node, "expanded_dims")
-        and isinstance(node, IterArg)
-        and (
-            filter_and_zero_unselected_dims(dims, node.indexing_dims)
-            == node.fx_node.expanded_dims  # type: ignore
-        )
+def already_expanded_op(node: CustomOp, dims: dict[IndexSymbol, int]) -> bool:
+    return hasattr(node.fx_node, "expanded_dims") and (
+        filter_and_zero_unselected_dims(dims, node.indexing_dims)
+        == node.fx_node.expanded_dims  # type: ignore
     )
 
 
@@ -339,6 +335,12 @@ def _expand_node(
         # Allocate nodes are not expanded.
         return node
 
+    # Handles case where we are trying to expand a "new_node" that
+    # came from an expansion of the original node. To prevent re-expansion
+    # of the "new_node" in the same dims.
+    if already_expanded_op(node, dim_query):
+        return node
+
     # Filter out the dimensions that are not indexed by the node
     restricted_dims = filter_and_zero_unselected_dims(dim_query, node.indexing_dims)
     logger.debug(f"Expanding node: {node} in {restricted_dims}")
@@ -387,6 +389,8 @@ def _expand_node(
     new_node.post_expansion(constraints)
 
     context[(node, get_indexed_dims(restricted_dims, node), res_idx)] = new_node
+    # Uncomment to fix:
+    # context[(new_node, get_indexed_dims(restricted_dims, node), res_idx)] = new_node
     return new_node
 
 
@@ -482,12 +486,7 @@ def _expand_reduction(
     )
     # Even though we expanded the reduction in multiple dimensions, we only return
     # the node corresponding to the original query
-    try:
-        return context[(reduction, get_indexed_dims(dim_query, expand_dims), res_idx)]
-    except:
-        import pdb
-
-        pdb.set_trace()
+    return context[(reduction, get_indexed_dims(dim_query, expand_dims), res_idx)]
 
 
 def get_expanded_name(node: CustomOp, dims: dict[IndexSymbol, int]) -> str:
@@ -587,6 +586,7 @@ def _handle_reduction_dim(
         if isinstance(node, IterArg):
             iter_args.append(node)
 
+    # import pdb; pdb.set_trace()
     new_outputs = list(reduction.outputs(trace.get_subgraph(reduction.subgraph_name)))
     # Users of the loop carried nodes will be duplicated
     for idx, carried_node in enumerate(iter_args):
@@ -595,8 +595,10 @@ def _handle_reduction_dim(
             for user in carried_node.users:
                 if isinstance(user, Output):
                     continue
+                if reduction.axis not in user.indexing_dims:
+                    continue
 
-                dims = user.fx_node.expanded_dims
+                dims = user.fx_node.expanded_dims.copy()
                 dims[reduction.axis] = scale_idx
                 # Temporarily replace the loop carried arg here to avoid
                 # duplicated expansion. Otherwise we have the following situation:
@@ -624,13 +626,21 @@ def _handle_reduction_dim(
                 )
 
                 # This expansion always happens, user should never be reused
-                # if new_node == user:
-                #     import pdb; pdb.set_trace()
-                # assert new_node != user
+                assert new_node != user
                 user.update_arg(index, saved_arg)
                 new_node.update_arg(index, user)
                 user.graph.erase_node(dummy)
                 carried_node = user
                 new_outputs[idx] = new_node.fx_node
+                new_iter_args = []
 
+                # if idx == 0:
+                #     import pdb; pdb.set_trace()
+                # for node in (get_custom(fx_node) for fx_node in reduction_subgraph.nodes):
+                #     if isinstance(node, IterArg):
+                #         new_iter_args.append(node)
+                # if len(new_iter_args) != len(iter_args):
+                #     import pdb; pdb.set_trace()
+                # old_iter_arg = new_iter_args
+    # import pdb; pdb.set_trace()
     output.update_arg("return_vals", new_outputs)

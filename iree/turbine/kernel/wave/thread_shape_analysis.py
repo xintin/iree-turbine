@@ -100,6 +100,7 @@ def handle_conflicts(conflicted_ops: set[CustomOp]):
     # Superset because path/cumulative resolved includes resolution helper ops
     # such as broadcast.
     all_conflicts_resolved = cummulative_resolved.issuperset(conflicted_ops)
+    # TODO: For some reason broadcast is not being propagated to chain-use transpose.
     return all_conflicts_resolved
 
 
@@ -162,10 +163,19 @@ def determine_thread_shapes(trace: CapturedTrace):
             ).union(fwd_slice)
         elif isinstance(custom, ReduceOp):
             fwd_slice = capture_forward_slice(custom.fx_node, propagatable_op)
-            reduce_dims = frozenset([DimSize(dim, 1) for dim in custom.index.keys()])
-            thread_size_to_ops[reduce_dims] = thread_size_to_ops.get(
-                reduce_dims, set([])
-            ).union(fwd_slice)
+            bwd_slice = set()
+            if custom.init != None and not isinstance(
+                get_custom(custom.init), ReduceOp
+            ):
+                bwd_slice = capture_backward_slice(custom.init, propagatable_op)
+            reduce_dims = frozenset(
+                [DimSize(dim, 1) for dim in custom.index.keys() if dim != custom.dim]
+            )
+            thread_size_to_ops[reduce_dims] = (
+                thread_size_to_ops.get(reduce_dims, set([]))
+                .union(fwd_slice)
+                .union(bwd_slice)
+            )
         elif isinstance(custom, Write):
             bwd_slice = capture_backward_slice(custom.fx_node, propagatable_op)
             thread_size_to_ops[index_sizes] = thread_size_to_ops.get(
@@ -199,13 +209,15 @@ def determine_thread_shapes(trace: CapturedTrace):
         if not cummulative_set.isdisjoint(target_ops):
             conflicted_ops = cummulative_set.intersection(target_ops)
             if handle_conflicts(conflicted_ops) == False:
-                import pdb
-
-                pdb.set_trace()
                 raise NotImplementedError("Failed to handle conflicting thread shape.")
             target_ops = target_ops.difference(conflicted_ops)
         cummulative_set = cummulative_set.union(target_ops)
         # Set target ops's indexSize to be the determined from analysis.
         for user in target_ops:
             custom_user = get_custom(user)
-            set_index_size(custom_user, target_index_size)
+            try:
+                set_index_size(custom_user, target_index_size)
+            except:
+                import pdb
+
+                pdb.set_trace()

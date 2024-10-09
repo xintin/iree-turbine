@@ -573,7 +573,12 @@ class UnaryPyOp(CustomOp, ABC):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        return get_custom(self.arg).indexing_dims
+        try:
+            return get_custom(self.arg).indexing_dims
+        except:
+            import pdb
+
+            pdb.set_trace()
 
     @property
     def py_operator(self) -> str:
@@ -1165,7 +1170,9 @@ class ReduceOp(CustomOp, ABC):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        return get_custom(self.arg).indexing_dims
+        src_indexing = get_custom(self.arg).indexing_dims
+        dst_indexing = [dim for dim in src_indexing if dim != self.dim]
+        return dst_indexing
 
     @property
     def type(self) -> Memory:
