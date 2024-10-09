@@ -264,7 +264,7 @@ class ParameterArchiveBuilder:
         """Saves the archive."""
         str_file_path = str(file_path)
         if not str_file_path.endswith(".irpa"):
-            file_path = str_file_path + ".irpa"
+            str_file_path = str_file_path + ".irpa"
         self._index.create_archive_file(str_file_path)
 
     def add_tensor(self, name: str, tensor: torch.Tensor):
