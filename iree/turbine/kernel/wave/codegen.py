@@ -711,7 +711,10 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     vector_shape = cast_py_literal(emitter, (elements_per_thread,))
 
     # TODO: Support elements_per_thread size mismatch and broadcasting
+    if tuple(insert_type.shape) != vector_shape:
+        import pdb
 
+        pdb.set_trace()
     assert (
         tuple(insert_type.shape) == vector_shape
     ), f"Shape doesn't match: {tuple(insert_type.shape)} and {(vector_shape)}"

@@ -503,11 +503,16 @@ def get_inputs(
     custom = get_custom(node)
     if isinstance(custom, IterArg):
         # Map iter args to init args
-        local_reduction = reduction
-        if reduction is None:
-            local_reduction = custom.parent_op()
+        # local_reduction = reduction
+        # if reduction is None:
+        local_reduction = custom.parent_op()
         iter_arg_idx = custom.get_iter_idx()
-        inputs.append(local_reduction.init_args[iter_arg_idx])
+        try:
+            inputs.append(local_reduction.init_args[iter_arg_idx])
+        except:
+            import pdb
+
+            pdb.set_trace()
     elif isinstance(custom, GetResult):
         reduction = get_custom(custom.value)
         assert isinstance(

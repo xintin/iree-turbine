@@ -234,10 +234,10 @@ class LaunchableWave(Launchable):
         apply_shared_memory_indexing_corrections(graph, self.constraints)
 
         # Partition strided operators.
+        # import pdb; pdb.set_trace()
         partition_strided_operators(graph, self.constraints)
 
         # Analyze Thread Shapes per Op.
-        # import pdb; pdb.set_trace()
         determine_thread_shapes(graph)
 
         # Decompose reduce Ops.
