@@ -1202,13 +1202,15 @@ class ReduceOp(CustomOp, ABC):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        src_indexing = get_custom(self.arg).indexing_dims
+        src = self.arg[0] if isinstance(self.arg, list) else self.arg
+        src_indexing = get_custom(src).indexing_dims
         dst_indexing = [dim for dim in src_indexing if dim != self.dim]
         return dst_indexing
 
     @property
     def type(self) -> Memory:
-        src_type = get_custom(self.arg).type
+        src = self.arg[0] if isinstance(self.arg, list) else self.arg
+        src_type = get_custom(src).type
         reduced_dims = [dims for dims in src_type.symbolic_shape if dims != self.dim]
         dst_type = Register[*reduced_dims, src_type.dtype]
         return dst_type
