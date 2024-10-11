@@ -586,69 +586,71 @@ def _handle_reduction_dim(
     context: ExpandedNodeMap,
     res_idx: int,
 ):
-    # Rediscover iter args
-    # TODO: Register iter args with the reduction initially so accessing them is easier
-    iter_args: list[CustomOp] = []
+    # Iterate through ops that requires expansion in reduction dims
+    # and expand starting there and propagate up.
+    reduction_root_ops: list[CustomOp] = []
     reduction_subgraph = trace.get_subgraph(reduction.subgraph_name)
     for node in (get_custom(fx_node) for fx_node in reduction_subgraph.nodes):
-        if isinstance(node, IterArg):
-            iter_args.append(node)
+        if isinstance(node, MMA):
+            reduction_root_ops.append(node)
 
-    # import pdb; pdb.set_trace()
+    # TODO: Add support for case where we process MMA before returning to IterArg.
+    def get_output_index(custom: CustomOp):
+        output_users = [
+            get_custom(user)
+            for user in custom.fx_node.users
+            if isinstance(get_custom(user), Output)
+        ]
+        if len(output_users) != 1:
+            raise NotImplementedError(
+                "NYI: Currently only handle direct and 1:1 MMA -> Output case."
+            )
+        return output_users[0].return_vals[0].index(custom.fx_node)
+
     new_outputs = list(reduction.outputs(trace.get_subgraph(reduction.subgraph_name)))
-    # Users of the loop carried nodes will be duplicated
-    for idx, carried_node in enumerate(iter_args):
-        # The initial nodes are expanded in the first dimension, so we start from 1
+    for reduction_root_op in reduction_root_ops:
+        op_output_index = get_output_index(reduction_root_op)
         for scale_idx in range(1, dim_scaling[reduction.axis]):
-            for user in carried_node.users:
-                if isinstance(user, Output):
-                    continue
-                if reduction.axis not in user.indexing_dims:
-                    continue
-
-                dims = user.fx_node.expanded_dims.copy()
-                dims[reduction.axis] = scale_idx
-                # Temporarily replace the loop carried arg here to avoid
-                # duplicated expansion. Otherwise we have the following situation:
-                # Suppose we have:
-                #   mma_0_0_0(..., acc_0_0_0)
-                #   mma_0_0_1(..., mma_0_0_0)
-                # Expanding mma_0_0_1 to mma_0_0_2 will trigger expansion of its arg
-                # mma_0_0_0 in dims 0_0_2 as well, effectively duplicating the new node.
-                # To avoid this we temporarily replace the use of it with a dummy
-                # placeholder which will not trigger further expansion.
-                index = user.get_node_arg_index(carried_node)
-                dummy = Placeholder("dummy").add_to_graph(user.graph)
-                dummy.type = None
-
-                saved_arg = user.node_args[index]
-                user.update_arg(index, dummy)
-                new_node = _expand_node(
-                    user,
-                    trace,
-                    dims,
-                    dim_scaling,
-                    node_index_setter,
-                    context,
-                    res_idx,
+            if reduction.axis not in reduction_root_op.indexing_dims:
+                raise NotImplementedError(
+                    "NYI: Cannot handle when we do not find reduction axis in MMA."
                 )
 
-                # This expansion always happens, user should never be reused
-                assert new_node != user
-                user.update_arg(index, saved_arg)
-                new_node.update_arg(index, user)
-                user.graph.erase_node(dummy)
-                carried_node = user
-                new_outputs[idx] = new_node.fx_node
-                new_iter_args = []
+            dims = reduction_root_op.fx_node.expanded_dims.copy()
+            dims[reduction.axis] = scale_idx
+            # Temporarily replace the loop carried arg here to avoid
+            # duplicated expansion. Otherwise we have the following situation:
+            # Suppose we have:
+            #   mma_0_0_0(..., acc_0_0_0)
+            #   mma_0_0_1(..., mma_0_0_0)
+            # Expanding mma_0_0_1 to mma_0_0_2 will trigger expansion of its arg
+            # mma_0_0_0 in dims 0_0_2 as well, effectively duplicating the new node.
+            # To avoid this we temporarily replace the use of it with a dummy
+            # placeholder which will not trigger further expansion.
+            dummy = Placeholder("dummy").add_to_graph(reduction_root_op.graph)
+            dummy.type = None
 
-                # if idx == 0:
-                #     import pdb; pdb.set_trace()
-                # for node in (get_custom(fx_node) for fx_node in reduction_subgraph.nodes):
-                #     if isinstance(node, IterArg):
-                #         new_iter_args.append(node)
-                # if len(new_iter_args) != len(iter_args):
-                #     import pdb; pdb.set_trace()
-                # old_iter_arg = new_iter_args
-    # import pdb; pdb.set_trace()
+            saved_arg = reduction_root_op.acc
+            reduction_root_op.update_arg("acc", dummy)
+            new_node = _expand_node(
+                reduction_root_op,
+                trace,
+                dims,
+                dim_scaling,
+                node_index_setter,
+                context,
+                res_idx,
+            )
+
+            # This expansion always happens, user should never be reused
+            assert new_node != reduction_root_op
+
+            # Update MMA_{t} to accumulate on MMA_{t-1}, and then save
+            # current MMA_{t} to outputs for use in next loop.
+            reduction_root_op.update_arg("acc", saved_arg)
+            new_node.update_arg("acc", new_outputs[op_output_index])
+            reduction_root_op.graph.erase_node(dummy)
+            reduction_root_op = new_node
+            new_outputs[op_output_index] = new_node.fx_node
+
     output.update_arg("return_vals", new_outputs)
