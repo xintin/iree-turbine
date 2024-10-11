@@ -214,6 +214,9 @@ def test_gemm():
         graph = gemm()
         IndexingContext.current().finalize()
         expand_graph(graph, constraints)
+        import pdb
+
+        pdb.set_trace()
         print_trace(graph)
         # Root graph:
         # CHECK: %a

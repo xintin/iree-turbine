@@ -51,8 +51,8 @@ def set_index_size(custom: CustomOp, target_dim_sizes: list[DimSize]):
 # Anchor Indicies and Conflict resolution helpers
 #################################################################
 
-anchorOpTypes = (Read, Write, MMA, ReduceOp)
-noHandleTypes = (Placeholder, Output, ExtractSlice, Allocate, GetResult)
+anchorOpTypes = (Read, Write, MMA, ReduceOp, GetResult)
+noHandleTypes = (Placeholder, Output, ExtractSlice, Allocate)
 nonPropagatableTypes = anchorOpTypes + noHandleTypes
 
 
@@ -156,7 +156,7 @@ def determine_thread_shapes(trace: CapturedTrace):
     for anchor_op in anchor_ops:
         custom = get_custom(anchor_op)
         index_sizes = get_custom_dim_sizes(custom)
-        if isinstance(custom, Read):
+        if isinstance(custom, (Read, GetResult)):
             fwd_slice = capture_forward_slice(custom.fx_node, propagatable_op)
             thread_size_to_ops[index_sizes] = thread_size_to_ops.get(
                 index_sizes, set([])
@@ -208,16 +208,21 @@ def determine_thread_shapes(trace: CapturedTrace):
         # Try to handle conflicts and remove from target set if successfully handled.
         if not cummulative_set.isdisjoint(target_ops):
             conflicted_ops = cummulative_set.intersection(target_ops)
-            if handle_conflicts(conflicted_ops) == False:
-                raise NotImplementedError("Failed to handle conflicting thread shape.")
+            try:
+                if handle_conflicts(conflicted_ops) == False:
+                    import pdb
+
+                    pdb.set_trace()
+                    raise NotImplementedError(
+                        "Failed to handle conflicting thread shape."
+                    )
+            except:
+                import pdb
+
+                pdb.set_trace()
             target_ops = target_ops.difference(conflicted_ops)
         cummulative_set = cummulative_set.union(target_ops)
         # Set target ops's indexSize to be the determined from analysis.
         for user in target_ops:
             custom_user = get_custom(user)
-            try:
-                set_index_size(custom_user, target_index_size)
-            except:
-                import pdb
-
-                pdb.set_trace()
+            set_index_size(custom_user, target_index_size)
