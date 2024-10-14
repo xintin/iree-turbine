@@ -27,6 +27,7 @@ from .utils import DCE, subs_idxc
 import torch.fx as fx
 import math
 from typing import Callable
+import sympy
 
 TKW_COMBINER = {"sum": Add, "max": Maximum}
 
@@ -52,15 +53,21 @@ def emit_local_reduction(
 
 
 def emit_global_reduction(
-    binary_fn: Callable, src: fx.Node, graph: fx.Graph, subgroup_size: int
+    binary_fn: Callable,
+    src: fx.Node,
+    graph: fx.Graph,
+    subgroup_size: int,
+    cluster_size: int,
+    cluster_stride: int,
 ) -> fx.Node:
     init = src
-    num_steps = int(math.log2(float(subgroup_size)))
-    for i in range(num_steps):
-        shuffle_offset = 2**i
-        shuffle_val = ShuffleOp(init, shuffle_offset, subgroup_size)
+    max_offset = cluster_size * cluster_stride
+    cur_offset = cluster_stride
+    while cur_offset < max_offset:
+        shuffle_val = ShuffleOp(init, int(cur_offset), subgroup_size)
         shuffle_node = get_graph_node(shuffle_val, graph)
         init = get_graph_node(binary_fn(init, shuffle_node), graph)
+        cur_offset *= 2
     return init
 
 
@@ -123,8 +130,28 @@ def decompose_reduce_ops(
             )
 
             # Global Reduce
+            vector_size = reduction_src[0].index[reduction_dim].size
+            if not isinstance(vector_size, (sympy.Integer, int)):
+                raise NotImplementedError(
+                    "Cannot handle non integer stride for index triplet."
+                )
+            vector_size = int(vector_size)
+            cluster_size = 64
+            cluster_stride = 1
+            if vector_size != 1:
+                cluster_stride = subgroup_size / vector_size
+                cluster_size = subgroup_size / cluster_stride
+            if cluster_size * cluster_stride > subgroup_size:
+                raise ValueError(
+                    "ReduceOp is illformed as cluster specified is > threads per wave."
+                )
             global_reduction = emit_global_reduction(
-                binary_fn, local_reduction, custom.graph, subgroup_size
+                binary_fn,
+                local_reduction,
+                custom.graph,
+                subgroup_size,
+                cluster_size,
+                cluster_stride,
             )
 
             # Local Accumulator Reduce
