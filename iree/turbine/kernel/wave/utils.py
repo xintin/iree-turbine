@@ -515,9 +515,7 @@ def get_inputs(
         inputs.append(local_reduction.init_args[iter_arg_idx])
     elif isinstance(custom, GetResult):
         reduction = get_custom(custom.value)
-        assert isinstance(
-            get_custom(reduction), Reduction
-        ), "GetResult must be used by a Reduction"
+        assert isinstance(reduction, Reduction), "GetResult must be used by a Reduction"
         # Map get result to output
         reduction_subgraph = reduction.get_root_graph().subgraphs[
             reduction.subgraph_name
