@@ -175,7 +175,7 @@ def test_nested_reduction_gemm():
         # To try attention, uncomment here:
         ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None)
         mb = gemm(q, k, v.T, c)
-        # import pdb; pdb.set_trace()
+
         with open("attention.mlir", "w") as f:
             f.write(str(mb.module_op))
 
