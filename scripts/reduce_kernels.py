@@ -46,16 +46,13 @@ def test_nested_reduction_gemm():
     ]
 
     @tkw.wave(constraints)
-    def base_ref_gemm(
+    def base_attention(
         q: tkl.Memory[M, K1, ADDRESS_SPACE, tkl.f16],
         k: tkl.Memory[K2, K1, ADDRESS_SPACE, tkl.f16],
         v: tkl.Memory[N, K2, ADDRESS_SPACE, tkl.f16],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-        d: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-        e: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-        f: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        c_reg = tkl.Register[N, M, tkl.f32](0.0)
         init_sum = tkl.Register[M, tkl.f32](0.0)
         init_max = tkl.Register[M, tkl.f32](-1e6)
         # This microkernel encodes the fact that if the reduction
@@ -64,11 +61,11 @@ def test_nested_reduction_gemm():
         def repeat(
             partial_max: tkl.Register[M, tkl.f32],
             partial_sum: tkl.Register[M, tkl.f32],
-            acc: tkl.Register[M, N, tkl.f32],
+            acc: tkl.Register[N, M, tkl.f32],
         ) -> (
             tkl.Register[M, tkl.f32],
             tkl.Register[M, tkl.f32],
-            tkl.Register[M, N, tkl.f32],
+            tkl.Register[N, M, tkl.f32],
         ):
             imm_reg = tkl.Register[K2, M, tkl.f32](0.0)
             # acc: tkw.Register[N, M, tkl.f32]
@@ -93,79 +90,13 @@ def test_nested_reduction_gemm():
             imm_f16 = tkw.trunc(e_delta, tkl.f16)
             v_reg = tkw.read(v, elements_per_thread=LOAD_ELEMS_PER_THREAD)
             new_acc = acc * e_delta_max
-            acc = tkw.mma(imm_f16, v_reg, new_acc)
+            acc = tkw.mma(v_reg, imm_f16, new_acc)
             return m_j, d_j, acc
 
         # repeat represents the results of the loop
         res_max, res_sum, res_mm = repeat
         res = res_mm / res_sum
-        res_max = res_mm / res_mm * res_max
-        res_sum = res_mm / res_mm * res_sum
-        tkw.write(res_sum, e, elements_per_thread=STORE_ELEMS_PER_THREAD)
-        tkw.write(res_max, f, elements_per_thread=STORE_ELEMS_PER_THREAD)
         tkw.write(res, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
-        tkw.write(res_mm, d, elements_per_thread=STORE_ELEMS_PER_THREAD)
-
-    # Wave-level micro-kernel.
-    # Since warps are not directly addressable, there is no
-    # explicit notion of a warp id (like a workgroup or thread id).
-    # This kernel uses the input sizes M, N, K throughout, as the tiling
-    # and data movement strategy is determined during the compilation process.
-    # These can be influenced by introducing constraints.
-    @tkw.wave(constraints)
-    def gemm(
-        q: tkl.Memory[M, K1, ADDRESS_SPACE, tkl.f16],
-        k: tkl.Memory[K2, K1, ADDRESS_SPACE, tkl.f16],
-        v: tkl.Memory[N, K2, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-        init_max = tkl.Register[M, tkl.f32](-1e6)
-        init_sum = tkl.Register[M, tkl.f32](0.0)
-        # This microkernel encodes the fact that if the reduction
-        # dimension were tiled, then we would need to materialize a loop.
-        @tkw.reduction(K2, init_args=[init_max, init_sum, c_reg])
-        def repeat(
-            partial_max: tkl.Register[M, tkl.f32],
-            partial_sum: tkl.Register[M, tkl.f32],
-            acc: tkl.Register[M, N, tkl.f32],
-        ) -> (
-            tkl.Register[M, tkl.f32],
-            tkl.Register[M, tkl.f32],
-            tkl.Register[M, N, tkl.f32],
-        ):
-            imm_reg = tkl.Register[K2, M, tkl.f32](0.0)
-            # acc: tkw.Register[N, M, tkl.f32]
-            @tkw.reduction(K1, init_args=[imm_reg])
-            def inner_loop(
-                inner_acc: tkl.Register[K2, M, tkl.f32]
-            ) -> tkl.Register[K2, M, tkl.f32]:
-                # a_reg: tkw.Register[M, K, tkl.f16]
-                q_reg = tkw.read(q, elements_per_thread=LOAD_ELEMS_PER_THREAD)
-                # b_reg: tkw.Register[N, K, tkl.f16]
-                k_reg = tkw.read(k, elements_per_thread=LOAD_ELEMS_PER_THREAD)
-                # acc: tkw.Register[N, M, tkl.f32]
-                inner_acc = tkw.mma(k_reg, q_reg, inner_acc)
-                return inner_acc
-
-            x_j = tkw.transpose(inner_loop, dims=[M, K2])
-            m_j = tkw.max(x_j, partial_max, dim=K2)
-            e_delta_max = tkw.exp2(partial_max - m_j)
-            e_init = partial_sum * e_delta_max
-            e_delta = tkw.exp2(x_j - m_j)
-            d_j = tkw.sum(e_delta, e_init, dim=K2)
-            # softmax_out = e_delta / d_j
-            immt_casted = tkw.trunc(e_delta, tkl.f16)
-            v_reg = tkw.read(v, elements_per_thread=LOAD_ELEMS_PER_THREAD)
-            new_acc = acc * e_delta_max
-            acc = tkw.mma(immt_casted, v_reg, new_acc)
-            return m_j, d_j, acc
-
-        # Debug why partial_sum is being considered for m=1, n=4.
-        # repeat represents the results of the loop
-        _, res_sum, res_output = repeat
-        res_attention = res_output / res_sum
-        tkw.write(res_attention, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
@@ -198,28 +129,15 @@ def test_nested_reduction_gemm():
         # TODO: Fix the max/sum is indeed transposed from the output.
         # TODO: Align Reference kernel and scaled_dot_product_attention
         # To try simple chain matmul, uncomment here:
-        imm = torch.matmul(q, k.T)
-        max_imm = torch.max(imm, dim=-1).values.reshape(-1, 1)
-        imm = torch.exp2(imm - max_imm)
-        ref_old = torch.matmul(imm, v)
-        sum_scale = torch.sum(imm, dim=-1).reshape(-1, 1)
-        ref = torch.matmul(imm, v) / sum_scale
         log2e = 1.44269504089
         dk_sqrt = 0.25
-        mb = base_ref_gemm(q * dk_sqrt * log2e, k, v.T, c, d, e, f)
-        import pdb
-
-        pdb.set_trace()
-
-        # To try attention, uncomment here:
-        # ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None)
-        # mb = gemm(q, k, v.T, c)
-        # import pdb; pdb.set_trace()
+        mb = base_attention(q * dk_sqrt * log2e, k, v.T, c)
+        ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None)
 
         # with open("attention_all_scale.mlir", "w") as f:
         #     f.write(str(mb.module_op))
 
-        assert_allclose(ref_old, d, atol=3e-2)
+        assert_allclose(ref, c, atol=3e-2)
         print("SUCCESS")
 
 

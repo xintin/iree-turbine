@@ -725,6 +725,16 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     index = node.index
     input_shape = _get_symbolic_shape(register)
     output_shape = _get_symbolic_shape(memory)
+    index_dims = [k for k in index.keys()]
+    if (
+        get_custom(node.args[1]).type.address_space == GLOBAL_ADDRESS_SPACE
+        and len(index_dims) == 2
+    ):
+        index[index_dims[0]], index[index_dims[1]] = (
+            index[index_dims[1]],
+            index[index_dims[0]],
+        )
+
     if mapping is None or _is_identity_mapping(
         mapping, input_shape=input_shape, output_shape=output_shape
     ):
