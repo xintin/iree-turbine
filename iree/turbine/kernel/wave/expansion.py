@@ -614,29 +614,45 @@ def _handle_reduction_dim(
     expanded_reductions = set()
     for reduction_root_op in reduction_root_ops:
         op_output_index = get_output_index(reduction_root_op)
-        if isinstance(reduction_root_op, MMA):
-            op_acc_name = "acc"
-        elif isinstance(reduction_root_op, ReduceOp):
-            op_acc_name = "init"
-        else:
-            raise NotImplementedError(
-                f"NYI: Expanding reduction dim for {type(reduction_root_op)} is not supported yet."
-            )
         if dim_scaling[reduction.axis] <= 1:
             continue
         dims = reduction_root_op.fx_node.expanded_dims.copy()
         last_expanded_reduction_op = reduction_root_op
         for scale_idx in range(1, dim_scaling[reduction.axis]):
             dims[reduction.axis] = scale_idx
-            new_node = reduction_root_op.copy(anchor=last_expanded_reduction_op.fx_node)
+            if isinstance(reduction_root_op, MMA):
+                new_node = reduction_root_op.copy(
+                    anchor=last_expanded_reduction_op.fx_node
+                )
+                # Expand/Update LHS and RHS
+                for arg_idx, node_arg in enumerate(new_node.fx_node.args):
+                    if node_arg == new_node.acc:
+                        continue
+                    new_node_arg = _expand_node(
+                        get_custom(node_arg),
+                        trace,
+                        dims,
+                        dim_scaling,
+                        node_index_setter,
+                        context,
+                        res_idx,
+                    )
+                    # This expansion always happens, user should never be reused
+                    assert new_node_arg != node_arg
+                    new_node.update_arg(arg_idx, new_node_arg)
 
-            for arg_idx, node_arg in enumerate(new_node.fx_node.args):
-                if not isinstance(node_arg, fx.Node):
-                    continue
-                if node_arg == getattr(new_node, op_acc_name):
-                    continue
-                new_node_arg = _expand_node(
-                    get_custom(node_arg),
+                # Update MMA_{t} to accumulate on MMA_{t-1}, and then save
+                # current MMA_{t} to outputs for use in next loop.
+                new_node.update_arg("acc", last_expanded_reduction_op)
+                new_node.fx_node.name = get_expanded_name(reduction_root_op, dims)
+                last_expanded_reduction_op = new_node
+                expanded_reductions.add(last_expanded_reduction_op)
+            elif isinstance(reduction_root_op, ReduceOp):
+                src = last_expanded_reduction_op.arg
+                if isinstance(src, list):
+                    src = src[0]
+                expanded_src = _expand_node(
+                    get_custom(src),
                     trace,
                     dims,
                     dim_scaling,
@@ -644,16 +660,10 @@ def _handle_reduction_dim(
                     context,
                     res_idx,
                 )
-                # This expansion always happens, user should never be reused
-                assert new_node_arg != node_arg
-                new_node.update_arg(arg_idx, new_node_arg)
-
-            # Update MMA_{t} to accumulate on MMA_{t-1}, and then save
-            # current MMA_{t} to outputs for use in next loop.
-            new_node.update_arg(op_acc_name, last_expanded_reduction_op)
-            new_node.fx_node.name = get_expanded_name(reduction_root_op, dims)
-            last_expanded_reduction_op = new_node
-            expanded_reductions.add(last_expanded_reduction_op)
+                if not isinstance(src, list):
+                    src = [src]
+                src.append(expanded_src.fx_node)
+                last_expanded_reduction_op.update_arg("arg", src)
 
         # Post processing
         init_dims = reduction_root_op.fx_node.expanded_dims
@@ -662,21 +672,4 @@ def _handle_reduction_dim(
         ] = last_expanded_reduction_op
         new_outputs[op_output_index] = last_expanded_reduction_op.fx_node
         new_reductions.append(last_expanded_reduction_op)
-        # for scale_idx in range(0, dim_scaling[reduction.axis]):
-        #     dims[reduction.axis] = scale_idx
-        #     context[(reduction_root_op, get_indexed_dims(dims, reduction_root_op), res_idx)] = last_expanded_reduction_op
-        # import pdb; pdb.set_trace()
-        # If I uncomment below, for some reason max_0_0_3_0 gets updated and removed to max_0_0_0_0
-        # for root_user in list(reduction_root_op.fx_node.users):
-        #     if get_custom(root_user) in expanded_reductions or isinstance(root_user, Output):
-        #         continue
-        #     root_user.replace_input_with(reduction_root_op.fx_node, last_expanded_reduction_op.fx_node)
-        # TODO: Figure out/check out after every iter here what is happening. graph seems to already be broken right after.
     output.update_arg("return_vals", new_outputs)
-    for old_reduc, new_reduc in zip(reduction_root_ops, new_reductions):
-        for root_user in list(old_reduc.fx_node.users):
-            if get_custom(root_user) in expanded_reductions or isinstance(
-                get_custom(root_user), Output
-            ):
-                continue
-            root_user.replace_input_with(old_reduc.fx_node, new_reduc.fx_node)

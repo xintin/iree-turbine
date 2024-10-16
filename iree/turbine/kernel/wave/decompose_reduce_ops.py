@@ -39,12 +39,16 @@ def get_graph_node(custom: CustomOp, graph: fx.Graph):
 
 
 def emit_local_reduction(
-    binary_fn: Callable, src: fx.Node, graph: fx.Graph, local_reduction_size: int
+    binary_fn: Callable, src: list[fx.Node], graph: fx.Graph, local_reduction_size: int
 ) -> fx.Node:
-    init = get_graph_node(Extract(src, [0]), graph)
-    for i in range(1, local_reduction_size):
-        cur_slice = get_graph_node(Extract(src, [i]), graph)
-        init = get_graph_node(binary_fn(init, cur_slice), graph)
+    init = None
+    for i in range(len(src)):
+        for j in range(local_reduction_size):
+            if init is None:
+                init = get_graph_node(Extract(src[i], [j]), graph)
+                continue
+            cur_slice = get_graph_node(Extract(src[i], [j]), graph)
+            init = get_graph_node(binary_fn(init, cur_slice), graph)
     return init
 
 
@@ -60,10 +64,10 @@ def emit_global_reduction(
     max_offset = cluster_size * cluster_stride
     cur_offset = cluster_stride
     while cur_offset < max_offset:
-        cur_offset *= 2
         shuffle_val = ShuffleOp(init, int(cur_offset), subgroup_size)
         shuffle_node = get_graph_node(shuffle_val, graph)
         init = get_graph_node(binary_fn(init, shuffle_node), graph)
+        cur_offset *= 2
     return init
 
 
@@ -105,9 +109,14 @@ def decompose_reduce_ops(
                 raise ValueError(
                     "No reduction dim specified, please specify a reduction dim."
                 )
+            if not isinstance(reduction_src, list):
+                reduction_src = [reduction_src]
 
             # Local Reduce
-            if reduction_dim is not get_custom(custom.arg).type.symbolic_shape[-1]:
+            if (
+                reduction_dim
+                is not get_custom(reduction_src[0]).type.symbolic_shape[-1]
+            ):
                 import pdb
 
                 pdb.set_trace()
@@ -118,13 +127,13 @@ def decompose_reduce_ops(
             get_thread_shape = lambda index: max(
                 subs_idxc(x.size) for x in index.values()
             )
-            local_reduction_size = get_thread_shape(get_custom(custom.arg).index)
+            local_reduction_size = get_thread_shape(get_custom(reduction_src[0]).index)
             local_reduction = emit_local_reduction(
                 binary_fn, reduction_src, custom.graph, local_reduction_size
             )
 
             # Global Reduce
-            vector_size = reduction_src.index[reduction_dim].size
+            vector_size = reduction_src[0].index[reduction_dim].size
             if not isinstance(vector_size, sympy.Integer):
                 raise NotImplementedError(
                     "Cannot handle non integer stride for index triplet."
